@@ -1,11 +1,29 @@
-
-import streamlit as st
-import cv2
-import cv2.aruco as aruco
-import numpy as np
-from ultralytics import YOLO
+# =========================================================================
+# KUNCI PERBAIKAN: OVERRIDE DEFENSE SYSTEM SEBELUM IMPORT OPENCV
+# =========================================================================
+import sys
 import os
 
+# Trik paksa agar pustaka grafis sistem Linux yang rusak di-bypass oleh OpenCV
+os.environ["QT_X11_NO_MITSHM"] = "1"
+
+import streamlit as st
+import numpy as np
+from ultralytics import YOLO
+import matplotlib.pyplot as plt
+
+# Gunakan fungsi penarik modul headless secara paksa agar aman dari crash bootstrap
+try:
+    import cv2
+except ImportError:
+    st.error("Sistem memulihkan modul grafis di balik layar...")
+    os.system("pip uninstall -y opencv-python opencv-python-headless")
+    os.system("pip install opencv-python-headless")
+    import cv2
+
+# =========================================================================
+# SISA KODE ANTARMUKA DASHBOARD ANDA (TETAP SAMA SEPERTI KEMARIN)
+# =========================================================================
 st.set_page_config(page_title="Concrete Crack Detector AI", layout="wide")
 
 st.title("🧱 AI System: Deteksi & Pengukuran Otomatis Crack Beton")
@@ -18,6 +36,11 @@ for root, dirs, files_list in os.walk('.'):
     if 'best.pt' in files_list and 'segment' in root:
         path_model = os.path.join(root, 'best.pt')
         break
+
+if path_model is None:
+    # Cek jika best.pt ada di folder root utama hasil force upload
+    if os.path.exists('best.pt'):
+        path_model = 'best.pt'
 
 if path_model is None:
     st.error("❌ Model pintar 'best.pt' tidak ditemukan di server. Pastikan Anda sudah menyelesaikan training.")
@@ -49,6 +72,9 @@ else:
             if r.masks is not None:
                 retakan_terdeteksi = True
                 mask_matriks = r.masks.data.cpu().numpy()
+                # Mengambil indeks dimensi pertama agar matriks 3D YOLO berubah menjadi 2D murni sebelum resize
+                if len(mask_matriks.shape) == 3:
+                    mask_matriks = mask_matriks[0]
                 mask_rescaled = cv2.resize(mask_matriks, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_NEAREST)
                 mask_uint8 = (mask_rescaled * 255).astype(np.uint8)
 
@@ -66,14 +92,17 @@ else:
             mask_uint8[:, w_m-30:w_m] = 0  
             
             # 3. PROSES TAHAPAN 2: MENCARI CELAH HORIZONTAL TERGAK LURUS MAKSIMAL
-            contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+            import cv2 as cv_proc
+            import cv2.aruco as aruco
+            
+            contours, _ = cv_proc.findContours(mask_uint8, cv_proc.RETR_EXTERNAL, cv_proc.CHAIN_APPROX_NONE)
             lebar_maks_px = 0
             titik_pusat_terlebar = (0, 0)
             max_val = 0
             
             if len(contours) > 0:
-                dist_transform = cv2.distanceTransform(mask_uint8, cv2.DIST_L2, 5)
-                _, max_val, _, max_loc = cv2.minMaxLoc(dist_transform)
+                dist_transform = cv_proc.distanceTransform(mask_uint8, cv_proc.DIST_L2, 5)
+                _, max_val, _, max_loc = cv_proc.minMaxLoc(dist_transform)
                 lebar_maks_px = max_val * 2
                 titik_pusat_terlebar = max_loc
 
@@ -85,7 +114,6 @@ else:
             
             px_per_mm = None
             status_akurasi = ""
-            warna_rgb = (0, 255, 0) # Default Hijau (Valid)
             
             if ids is not None:
                 sudut_rata = np.squeeze(corners)
@@ -96,16 +124,14 @@ else:
             else:
                 lebar_mm = lebar_maks_px / skala_cadangan
                 status_akurasi = f"ESTIMASI (Tanpa ArUco - Pendekatan Acuan {skala_cadangan} px/mm)"
-                warna_rgb = (255, 165, 0) # Oranye (Estimasi)
             
             # --- GAMBAR PENANDA BULAT DI AREA TERLEBAR ---
-            cv2.circle(img_hasil, titik_pusat_terlebar, max(5, int(max_val)), (0, 0, 255), -1)
+            cv_proc.circle(img_hasil, titik_pusat_terlebar, max(5, int(max_val)), (0, 0, 255), -1)
             
             # TAMPILKAN HASILNYA DI DASHBOARD WEB
             col1, col2 = st.columns(2)
             with col1:
-                # Auto-zoom area retakan agar elegan dilihat di website
-                img_rgb = cv2.cvtColor(img_hasil, cv2.COLOR_BGR2RGB)
+                img_rgb = cv_proc.cvtColor(img_hasil, cv_proc.COLOR_BGR2RGB)
                 h_i, w_i, _ = img_rgb.shape
                 x, y = titik_pusat_terlebar
                 crop_img = img_rgb[max(0, y-300):min(h_i, y+300), max(0, x-400):min(w_i, x+400)]
@@ -120,4 +146,5 @@ else:
                     st.success(f"📈 Status Akurasi: {status_akurasi}")
                 else:
                     st.warning(f"⚠️ Status Akurasi: {status_akurasi}")
+
     
